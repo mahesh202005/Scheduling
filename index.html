@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-Time Scheduling Simulator</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+:root{
+  --rms-color:#3fa9f5;
+  --edf-color:#ffb347;
+  --llf-color:#6fcf97;
+}
+body{
+  margin:0;
+  font-family:'Poppins',sans-serif;
+  color:#fff;
+  background:#000;
+}
+.hero{
+  background:url('wallpaperflare.com_wallpaper.jpg') center/cover no-repeat;
+  height:60vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  position:relative;
+  color:#fff;
+}
+.hero::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:rgba(0,0,0,0.5);
+}
+.hero h1{
+  font-size:2.5rem;
+  z-index:1;
+}
+.hero p{
+  z-index:1;
+  font-size:1.1rem;
+}
+section{
+  max-width:1000px;
+  margin:auto;
+  padding:30px;
+}
+.card{
+  background:rgba(255,255,255,0.12);
+  border:1px solid rgba(255,255,255,0.25);
+  backdrop-filter:blur(10px);
+  border-radius:15px;
+  padding:25px;
+  margin:25px 0;
+  box-shadow:0 4px 20px rgba(0,0,0,0.4);
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  transition:.3s;
+}
+.card:hover{transform:scale(1.02);}
+.card img{
+  width:180px;
+  border-radius:12px;
+  margin:10px;
+}
+.card-text{
+  flex:1;
+  min-width:260px;
+}
+button,select,input{
+  border:none;
+  border-radius:6px;
+  padding:8px 12px;
+  margin:5px;
+  outline:none;
+}
+button{
+  cursor:pointer;
+  font-weight:600;
+  transition:.3s;
+  box-shadow:0 0 10px rgba(255,255,255,0.2);
+}
+button:hover{transform:translateY(-2px);}
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:10px;
+}
+th,td{
+  border-bottom:1px solid rgba(255,255,255,0.3);
+  text-align:center;
+  padding:6px;
+  color:#fff;
+}
+canvas{
+  border:2px solid rgba(255,255,255,0.5);
+  border-radius:10px;
+  background:rgba(0,0,0,0.3);
+  display:block;
+  margin:25px auto;
+}
+footer{
+  text-align:center;
+  padding:15px;
+  background:rgba(0,0,0,0.6);
+  border-top:1px solid rgba(255,255,255,0.2);
+}
+.legend{text-align:center;margin-top:10px;}
+.legend span{
+  display:inline-block;width:18px;height:18px;margin-right:6px;
+  border-radius:4px;border:1px solid #fff;
+}
+</style>
+</head>
+<body>
+<div class="hero">
+  <h1>🌙 Real-Time Scheduling Algorithms</h1>
+  <p>Interactive Showcase by Rithesh & Team</p>
+</div>
+
+<section>
+  <div class="card">
+    <img src="https://cdn-icons-png.flaticon.com/512/3135/3135755.png" alt="Task Icon">
+    <div class="card-text">
+      <h2>Task Input Panel</h2>
+      <label>Task <input id="tName"></label>
+      <label>Exec <input id="tExec" type="number" step="0.1"></label>
+      <label>Period <input id="tPeriod" type="number" step="0.1"></label>
+      <label>Deadline <input id="tDead" type="number" step="0.1"></label>
+      <button style="background:#fff;color:#000" onclick="addTask()">➕ Add</button>
+      <table id="taskTable">
+        <thead><tr><th>Task</th><th>Exec</th><th>Period</th><th>Deadline</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <img src="https://cdn-icons-png.flaticon.com/512/2933/2933245.png" alt="CPU Icon">
+    <div class="card-text">
+      <h2>Choose Scheduling Algorithm</h2>
+      <select id="algo">
+        <option value="RMS">Rate Monotonic (RMS)</option>
+        <option value="EDF">Earliest Deadline First (EDF)</option>
+        <option value="LLF">Least Laxity First (LLF)</option>
+      </select>
+      <button id="simBtn" style="background:#3fa9f5;color:#fff" onclick="simulate()">▶ Simulate</button>
+      <div id="algoInfo" class="info-box"></div>
+      <canvas id="chart" width="850" height="250"></canvas>
+      <div class="legend" id="legend"></div>
+      <p id="result" style="text-align:center;font-weight:bold;"></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <img src="https://cdn-icons-png.flaticon.com/512/3261/3261308.png" alt="Clock Icon">
+    <div class="card-text">
+      <h2>About Real-Time Scheduling</h2>
+      <p>Real-Time systems require tasks to execute within strict timing limits. Algorithms such as RMS, EDF, and LLF determine which task runs when, ensuring deadlines are met and CPU usage stays optimal.</p>
+    </div>
+  </div>
+</section>
+
+<footer>© 2025 Rithesh | Operating Systems Showcase</footer>
+
+<script>
+const tasks=[];
+const canvas=document.getElementById("chart");
+const ctx=canvas.getContext("2d");
+
+function addTask(){
+  const n=document.getElementById("tName").value.trim(),
+        e=parseFloat(document.getElementById("tExec").value),
+        p=parseFloat(document.getElementById("tPeriod").value),
+        d=parseFloat(document.getElementById("tDead").value);
+  if(!n||isNaN(e)||isNaN(p)||isNaN(d)){alert("Please fill all fields.");return;}
+  tasks.push({name:n,exec:e,period:p,deadline:d});
+  updateTable();
+  ["tName","tExec","tPeriod","tDead"].forEach(i=>document.getElementById(i).value="");
+}
+function updateTable(){
+  const body=document.querySelector("#taskTable tbody");
+  body.innerHTML="";
+  tasks.forEach(t=>body.insertAdjacentHTML("beforeend",`<tr><td>${t.name}</td><td>${t.exec}</td><td>${t.period}</td><td>${t.deadline}</td></tr>`));
+}
+function explain(a){
+  if(a==="RMS")return "⭐ <b>Rate Monotonic:</b> Static priority, shortest period wins.";
+  if(a==="EDF")return "🔥 <b>Earliest Deadline First:</b> Dynamic priority based on deadline.";
+  if(a==="LLF")return "🌿 <b>Least Laxity First:</b> Chooses task with smallest laxity.";
+}
+function simulate(){
+  if(tasks.length===0){alert("Add some tasks first.");return;}
+  const a=document.getElementById("algo").value;
+  const b=document.getElementById("simBtn");
+  b.style.background=a==="RMS"?"var(--rms-color)":a==="EDF"?"var(--edf-color)":"var(--llf-color)";
+  document.getElementById("algoInfo").innerHTML=explain(a);
+  drawGantt(a);
+}
+function drawGantt(a){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const colors=["#3fa9f5","#ffb347","#6fcf97","#f78da7","#f6c90e"];
+  const scale=60;let x=50;let y=100;
+  ctx.font="15px Poppins";ctx.fillStyle="#fff";
+  ctx.fillText(`Gantt Chart - ${a}`,330,40);
+  tasks.forEach((t,i)=>{
+    const w=t.exec*scale;
+    ctx.fillStyle=colors[i%colors.length];
+    ctx.fillRect(x,y,w,45);
+    ctx.strokeStyle="#fff";ctx.strokeRect(x,y,w,45);
+    ctx.fillStyle="#000";ctx.fillText(t.name,x+12,y+28);
+    x+=w+25;
+  });
+  ctx.fillStyle="#fff";ctx.fillText("Time →",780,190);
+  const legend=document.getElementById("legend");
+  legend.innerHTML="";
+  tasks.forEach((t,i)=>{
+    legend.insertAdjacentHTML("beforeend",`<span style="background:${colors[i%colors.length]}"></span>${t.name}&nbsp;&nbsp;`);
+  });
+  document.getElementById("result").innerText=`Simulated ${a} for ${tasks.length} task(s).`;
+}
+</script>
+</body>
+</html>
