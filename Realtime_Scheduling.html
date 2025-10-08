@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Real-Time Scheduling Simulator — RMS / EDF / LLF (Corrected)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+  :root{--rms:#3fa9f5;--edf:#ffb347;--llf:#6fcf97;}
+  body{margin:0;background:#0f0f10;color:#fff;font-family:'Poppins',sans-serif}
+  .container{max-width:1100px;margin:18px auto;padding:18px}
+  h1{margin:0 0 12px}
+  .panel{display:flex;gap:18px;flex-wrap:wrap}
+  .card{background:rgba(255,255,255,0.06);padding:16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);flex:1;min-width:320px}
+  label{display:inline-block;margin:6px 8px 0 0}
+  input,select,button{padding:8px;border-radius:6px;border:none}
+  button{cursor:pointer;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin-top:10px}
+  th,td{padding:6px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.06)}
+  canvas{display:block;margin:14px auto;border-radius:10px;border:2px solid rgba(255,255,255,0.1);background:#0a0a0b}
+  .legend{margin-top:6px}
+  .legend span{display:inline-block;width:18px;height:18px;margin-right:8px;vertical-align:middle;border-radius:4px;border:1px solid #fff}
+  .note{font-size:13px;color:#ffd966;margin-top:8px}
+  .ok{color:#8be28b}
+  .warn{color:#ff8a8a}
+</style>
+</head>
+<body>
+  <div class="container">
+    <h1>Real-Time Scheduling Simulator — RMS • EDF • LLF</h1>
+    <div class="panel">
+      <div class="card">
+        <h3>Task Input</h3>
+        <div>
+          <label>Task <input id="tName" placeholder="T1" /></label>
+          <label>Exec <input id="tExec" type="number" min="1" step="1" placeholder="e.g. 3" /></label>
+          <label>Period <input id="tPeriod" type="number" min="1" step="1" placeholder="e.g. 5" /></label>
+          <label>Deadline <input id="tDead" type="number" min="1" step="1" placeholder="e.g. 5" /></label>
+        </div>
+        <div style="margin-top:10px">
+          <button onclick="addTask()" style="background:#fff;color:#000">➕ Add Task</button>
+          <button onclick="clearTasks()" style="margin-left:8px">🧹 Clear</button>
+        </div>
+
+        <table id="taskTable">
+          <thead><tr><th>Task</th><th>Exec</th><th>Period</th><th>Deadline</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Run Simulation</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="algo">
+            <option value="RMS">Rate Monotonic (RMS)</option>
+            <option value="EDF">Earliest Deadline First (EDF)</option>
+            <option value="LLF">Least Laxity First (LLF)</option>
+          </select>
+          <button id="runBtn" onclick="simulate()" style="background:var(--rms);color:#000">▶ Run</button>
+          <label style="margin-left:12px">Hyperperiod cap: <input id="hpCap" type="number" value="500" style="width:74px" /></label>
+        </div>
+
+        <canvas id="chart" width="980" height="260"></canvas>
+        <div class="legend" id="legend"></div>
+        <p id="result" class="note"></p>
+        <p id="hpNote" class="note"></p>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ---------------------------
+  Robust scheduler simulation
+   - preemptive
+   - RMS / EDF / LLF
+   - integer time units
+----------------------------*/
+const tasks = []; // tasks: {name, exec, period, deadline}
+const ctx = document.getElementById('chart').getContext('2d');
+
+function addTask(){
+  const n = document.getElementById('tName').value.trim();
+  const e = Number(document.getElementById('tExec').value);
+  const p = Number(document.getElementById('tPeriod').value);
+  const d = Number(document.getElementById('tDead').value);
+  if(!n || !isFinite(e) || !isFinite(p) || !isFinite(d) || e<=0 || p<=0 || d<=0){
+    alert('Please enter valid positive values for all fields.');
+    return;
+  }
+  tasks.push({name:n, exec:Math.floor(e), period:Math.floor(p), deadline:Math.floor(d)});
+  refreshTable();
+  document.getElementById('tName').value=''; document.getElementById('tExec').value='';
+  document.getElementById('tPeriod').value=''; document.getElementById('tDead').value='';
+}
+
+function clearTasks(){
+  tasks.length = 0;
+  refreshTable();
+  clearCanvas();
+  document.getElementById('result').textContent='';
+  document.getElementById('hpNote').textContent='';
+}
+
+function refreshTable(){
+  const tbody = document.querySelector('#taskTable tbody');
+  tbody.innerHTML = '';
+  for(const t of tasks){
+    const row = `<tr><td>${t.name}</td><td>${t.exec}</td><td>${t.period}</td><td>${t.deadline}</td></tr>`;
+    tbody.insertAdjacentHTML('beforeend', row);
+  }
+}
+
+/* ---- core scheduling simulation ----
+   At each integer time unit:
+   - release jobs whose (time % period === 0)  => new job with remain=exec, absDeadline = time + deadline
+   - choose the single job according to algorithm:
+       RMS: smallest task.period
+       EDF: smallest absDeadline
+       LLF: smallest laxity = (absDeadline - currentTime) - remain
+   - run chosen job for 1 unit (decrement remain)
+   - detect deadline misses when a job still has remain>0 at or after its absDeadline
+*/
+function simulate(){
+  if(tasks.length === 0){ alert('Add at least one task'); return; }
+
+  const algo = document.getElementById('algo').value;
+  const hpCap = Math.max(10, Number(document.getElementById('hpCap').value || 500));
+  document.getElementById('runBtn').style.background = algo === 'RMS' ? 'var(--rms)' : algo==='EDF' ? 'var(--edf)' : 'var(--llf)';
+  document.getElementById('result').textContent = '';
+  document.getElementById('hpNote').textContent = '';
+
+  // compute integer LCM(hyperperiod) of periods; guard large by hpCap
+  const periods = tasks.map(t => Math.max(1, Math.floor(t.period)));
+  let hyper = lcmArray(periods);
+  let capped = false;
+  if(hyper > hpCap){ hyper = hpCap; capped = true; }
+
+  // timeline list of {name, start, end}
+  const timeline = [];
+  // active jobs: array of job objects {taskName, remain, absDeadline, taskPeriod, releasedAt}
+  const active = [];
+  let deadlineMiss = false;
+
+  // we'll simulate time from t=0 to t<hyper (integer units)
+  for(let t = 0; t < hyper; t++){
+    // 1) release new jobs at period boundaries
+    for(const task of tasks){
+      if(t % task.period === 0){
+        active.push({
+          taskName: task.name,
+          remain: task.exec,
+          absDeadline: t + task.deadline,
+          taskPeriod: task.period,
+          releasedAt: t
+        });
+      }
+    }
+
+    // 2) filter out finished jobs (remain <= 0)
+    // (but keep them until after deadline checks so we don't drop early)
+    // we'll consider ready = active.filter(remain>0)
+    const ready = active.filter(j => j.remain > 0);
+
+    // 3) choose job based on algorithm
+    let chosen = null;
+    if(ready.length > 0){
+      if(algo === 'RMS'){
+        // static priority by taskPeriod (smaller = higher priority)
+        chosen = ready.reduce((a,b) => {
+          if(a==null) return b;
+          if(b.taskPeriod < a.taskPeriod) return b;
+          if(b.taskPeriod === a.taskPeriod){
+            // tie-break: earlier absolute deadline
+            return b.absDeadline < a.absDeadline ? b : a;
+          }
+          return a;
+        }, null);
+      } else if(algo === 'EDF'){
+        // dynamic earliest absolute deadline
+        chosen = ready.reduce((a,b) => {
+          if(a==null) return b;
+          if(b.absDeadline < a.absDeadline) return b;
+          // tie-break: smaller period
+          return b.taskPeriod < a.taskPeriod ? b : a;
+        }, null);
+      } else if(algo === 'LLF'){
+        // compute laxity for each job: (absDeadline - currentTime) - remain
+        ready.forEach(j => j._lax = (j.absDeadline - t) - j.remain);
+        chosen = ready.reduce((a,b) => {
+          if(a==null) return b;
+          if(b._lax < a._lax) return b;
+          if(b._lax === a._lax) return b.taskPeriod < a.taskPeriod ? b : a;
+          return a;
+        }, null);
+      }
+    }
+
+    // 4) run for 1 unit (preemption automatically handled because chosen is recalculated each time)
+    if(chosen){
+      chosen.remain -= 1;
+      timeline.push({name: chosen.taskName, start: t, end: t+1});
+    } else {
+      timeline.push({name: 'Idle', start: t, end: t+1});
+    }
+
+    // 5) After executing 1 unit, check deadlines (if a job's absDeadline <= t+1 and remain>0 -> miss)
+    for(const j of active){
+      if(j.remain > 0 && (t+1) >= j.absDeadline){
+        deadlineMiss = true;
+      }
+    }
+    // continue loop
+  }
+
+  // draw results
+  drawTimeline(timeline, tasks, deadlineMiss, hyper, capped);
+}
+
+/* ---------- drawing ---------- */
+function drawTimeline(timeline, tasksList, miss, hyper, capped){
+  // clear canvas
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '16px Poppins';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Gantt Chart — ${document.getElementById('algo').value}`, W/2, 36);
+
+  // color palette per task (deterministic)
+  const baseColors = ['#3fa9f5','#ffb347','#6fcf97','#f78da7','#9ad0ff','#ffd6a5','#c2f0c2'];
+  const taskNames = tasksList.map(t => t.name);
+  const colorMap = {};
+  for(let i=0;i<taskNames.length;i++) colorMap[taskNames[i]] = baseColors[i % baseColors.length];
+
+  // draw timeline blocks horizontally, scale depends on hyper
+  const left = 48, top = 80;
+  const unitW = Math.max(8, Math.floor((W - left - 80) / Math.max(10, hyper))); // ensure visible
+  let x = left;
+  const heightBlock = 36;
+
+  for(const seg of timeline){
+    const w = (seg.end - seg.start) * unitW;
+    const clr = seg.name === 'Idle' ? '#444' : (colorMap[seg.name] || '#666');
+    ctx.fillStyle = clr;
+    ctx.fillRect(x, top, w-1, heightBlock);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeRect(x, top, w-1, heightBlock);
+    if(seg.name !== 'Idle'){
+      ctx.fillStyle = '#000';
+      ctx.textAlign = 'left';
+      ctx.font = '13px Poppins';
+      ctx.fillText(seg.name, x + 4, top + 23);
+    }
+    x += w;
+  }
+
+  // draw time ruler (every 5 units if many)
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px Poppins';
+  let tickX = left;
+  for(let t=0;t<=hyper;t++){
+    if(t % Math.max(1, Math.ceil(hyper/20)) === 0){
+      ctx.fillText(t.toString(), tickX + unitW/2, top + heightBlock + 18);
+    }
+    tickX += unitW;
+  }
+
+  // legend
+  const legendDiv = document.getElementById('legend');
+  legendDiv.innerHTML = '';
+  for(const tn of taskNames){
+    const span = document.createElement('span');
+    span.style.background = colorMap[tn];
+    span.title = tn;
+    legendDiv.appendChild(span);
+    const txt = document.createTextNode(' ' + tn + '  ');
+    legendDiv.appendChild(txt);
+  }
+  // Idle
+  const spanIdle = document.createElement('span'); spanIdle.style.background = '#444';
+  legendDiv.appendChild(spanIdle);
+  legendDiv.appendChild(document.createTextNode(' Idle'));
+
+  // result message
+  const resultEl = document.getElementById('result');
+  if(miss){
+    resultEl.innerHTML = '⚠ Deadline miss detected — the task set is <b>unschedulable</b> under the chosen algorithm.';
+    resultEl.className = 'note warn';
+  } else {
+    resultEl.innerHTML = '✅ No deadline misses detected within the simulated hyperperiod.';
+    resultEl.className = 'note ok';
+  }
+
+  // hyperperiod note
+  const hpNote = document.getElementById('hpNote');
+  if(capped) hpNote.innerHTML = `Note: hyperperiod was capped at the chosen limit (see input). Simulated duration shows first ${timeline.length} time units.`;
+  else hpNote.innerHTML = `Simulated hyperperiod = ${timeline.length} time units.`;
+}
+
+/* ---------- helpers: gcd/lcm ---------- */
+function gcd(a,b){ return b === 0 ? a : gcd(b, a % b); }
+function lcm(a,b){ return (a/gcd(a,b))*b; }
+function lcmArray(arr){
+  if(!arr.length) return 1;
+  return arr.reduce((acc,x) => lcm(acc, x));
+}
+
+/* ---------- utility ---------- */
+function clearCanvas(){
+  ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+  ctx.fillStyle = '#fff'; ctx.font='16px Poppins'; ctx.textAlign='center';
+  ctx.fillText('Gantt chart will appear here after simulation', ctx.canvas.width/2, ctx.canvas.height/2);
+}
+
+/* initialize blank canvas */
+clearCanvas();
+</script>
+</body>
+</html>
